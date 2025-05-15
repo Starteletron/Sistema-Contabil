@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Totalizador de NFC-e com Produtos e Apuração de Impostos</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f4f7fa;
+      padding: 30px;
+      color: #333;
+      margin: 0;
+      height: 100vh;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: auto;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: nowrap;
+      height: 100%;
+    }
+
+    h1 {
+      color: #2c3e50;
+      font-size: 28px;
+    }
+
+    input[type="file"] {
+      padding: 8px;
+      border: 1px solid #ccc;
+      background: white;
+      border-radius: 5px;
+      margin-bottom: 15px;
+    }
+
+    button {
+      padding: 10px 20px;
+      background-color: #3498db;
+      border: none;
+      border-radius: 5px;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+
+    button:hover {
+      background-color: #2980b9;
+    }
+
+    .produtos-container {
+      width: 100%;
+      background-color: #ffffff;
+      border-radius: 10px;
+      padding: 20px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+      margin-top: 30px;
+      overflow-y: auto;
+      height: calc(100vh - 150px);
+    }
+
+    .impostos-container {
+      width: 28%;
+      background-color: #eafaf1;
+      border-radius: 10px;
+      padding: 20px;
+      margin-top: 30px;
+      position: sticky;
+      top: 30px;
+      height: 200px;
+    }
+
+    .resultado {
+      margin-top: 30px;
+      background-color: #eafaf1;
+      border-left: 5px solid #2ecc71;
+      padding: 20px;
+      border-radius: 6px;
+      font-size: 20px;
+      font-weight: bold;
+      color: #2c3e50;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px 10px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #ecf0f1;
+    }
+
+    /* Ajuste nas colunas para maior largura */
+    th:nth-child(1), td:nth-child(1) { min-width: 200px; }  /* Nome do produto */
+    th:nth-child(2), td:nth-child(2) { min-width: 120px; }  /* Valor Total */
+    th:nth-child(3), td:nth-child(3) { min-width: 120px; }  /* NCM */
+    th:nth-child(4), td:nth-child(4) { min-width: 120px; }  /* CFOP */
+    th:nth-child(5), td:nth-child(5) { min-width: 120px; }  /* CST */
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div>
+      <h1>Totalizador de NFC-e</h1>
+      <p>Selecione os arquivos XML de NFC-e:</p>
+      <input type="file" id="xmlFiles" multiple accept=".xml" />
+      <br><br>
+      <button onclick="calcularTotal()">Calcular Total e Listar Produtos</button>
+
+      <!-- Divisão para o relatório de produtos -->
+      <div class="produtos-container" id="produtosTabela" style="display: none;"></div>
+    </div>
+
+    <!-- Apuração de impostos fixa à direita -->
+    <div class="impostos-container" id="impostosContainer" style="display: none;">
+      <h2>Apuração de Impostos</h2>
+      <div><strong>PIS:</strong> R$ <span id="totalPIS">0.00</span></div>
+      <div><strong>COFINS:</strong> R$ <span id="totalCOFINS">0.00</span></div>
+      <div><strong>ICMS:</strong> R$ <span id="totalICMS">0.00</span></div>
+    </div>
+  </div>
+
+  <script>
+    function calcularTotal() {
+      const files = document.getElementById("xmlFiles").files;
+      const produtosTabela = document.getElementById("produtosTabela");
+      const impostosContainer = document.getElementById("impostosContainer");
+
+      if (!files.length) {
+        alert("Selecione arquivos XML.");
+        return;
+      }
+
+      let total = 0;
+      let totalPIS = 0;
+      let totalCOFINS = 0;
+      let totalICMS = 0;
+      let processadas = 0;
+      let produtos = [];
+
+      const regrasTributarias = {
+        pis: { default: 0.0165 },
+        cofins: { default: 0.076 },
+        cst: {
+          "00": { icms: 0.18 },
+          "20": { icms: 0.12 },
+          "40": { icms: 0 },
+        },
+        cfop: {
+          "5101": { icms: true },
+          "6101": { icms: true },
+          "5405": { icms: false }
+        },
+      };
+
+      Array.from(files).forEach(file => {
+        const reader = new FileReader();
+
+        reader.onload = function(event) {
+          const xmlText = event.target.result;
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+
+          // Soma o valor total da nota
+          const vNF = xmlDoc.getElementsByTagName("vNF")[0];
+          if (vNF) {
+            const valor = parseFloat(vNF.textContent.replace(',', '.')) || 0;
+            total += valor;
+          }
+
+          // Coleta produtos
+          const dets = xmlDoc.getElementsByTagName("det");
+          for (let i = 0; i < dets.length; i++) {
+            const prod = dets[i].getElementsByTagName("prod")[0];
+            if (prod) {
+              const nome = prod.getElementsByTagName("xProd")[0]?.textContent || "-";
+              const valorTotal = prod.getElementsByTagName("vProd")[0]?.textContent || "0";
+              const ncm = prod.getElementsByTagName("NCM")[0]?.textContent || "-";
+              const cfop = prod.getElementsByTagName("CFOP")[0]?.textContent || "-";
+              
+              // Agora buscamos o CST correto dentro de ICMS60, PISAliq e COFINS
+              const imposto = dets[i].getElementsByTagName("imposto")[0];
+              let cst = "-"; // Default value if no CST is found
+              
+              // Verifica CST dentro de ICMS
+              const cstICMS = imposto ? imposto.getElementsByTagName("ICMS60")[0]?.getElementsByTagName("CST")[0]?.textContent : null;
+              if (cstICMS) {
+                cst = cstICMS;
+              } else {
+                // Se não encontrado em ICMS, tenta PIS ou COFINS
+                const cstPIS = imposto ? imposto.getElementsByTagName("PISAliq")[0]?.getElementsByTagName("CST")[0]?.textContent : null;
+                if (cstPIS) {
+                  cst = cstPIS;
+                } else {
+                  const cstCOFINS = imposto ? imposto.getElementsByTagName("COFINSAliq")[0]?.getElementsByTagName("CST")[0]?.textContent : null;
+                  if (cstCOFINS) {
+                    cst = cstCOFINS;
+                  }
+                }
+              }
+
+              produtos.push({ nome, valorTotal, ncm, cfop, cst });
+
+              // Cálculo do PIS, COFINS e ICMS
+              totalPIS += parseFloat(valorTotal) * regrasTributarias.pis.default;
+              totalCOFINS += parseFloat(valorTotal) * regrasTributarias.cofins.default;
+
+              const aliquotaICMS = regrasTributarias.cst[cst]?.icms || 0;
+              totalICMS += parseFloat(valorTotal) * aliquotaICMS;
+            }
+          }
+
+          processadas++;
+          if (processadas === files.length) {
+            // Exibe os resultados após processar todos os arquivos
+            impostosContainer.style.display = "block";
+            produtosTabela.style.display = "block";
+
+            // Exibe o total de impostos apurados
+            document.getElementById("totalPIS").textContent = totalPIS.toFixed(2);
+            document.getElementById("totalCOFINS").textContent = totalCOFINS.toFixed(2);
+            document.getElementById("totalICMS").textContent = totalICMS.toFixed(2);
+
+            // Renderiza a tabela de produtos com as novas colunas
+            let tabelaHTML = `
+              <h2>Produtos nas Notas</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Produto</th>
+                    <th>Valor Total</th>
+                    <th>NCM</th>
+                    <th>CFOP</th>
+                    <th>CST</th>
+                  </tr>
+                </thead>
+                <tbody>
+            `;
+
+            produtos.forEach(prod => {
+              tabelaHTML += `
+                <tr>
+                  <td>${prod.nome}</td>
+                  <td>R$ ${parseFloat(prod.valorTotal).toFixed(2)}</td>
+                  <td>${prod.ncm}</td>
+                  <td>${prod.cfop}</td>
+                  <td>${prod.cst}</td>
+                </tr>
+              `;
+            });
+
+            tabelaHTML += `</tbody></table>`;
+            produtosTabela.innerHTML = tabelaHTML;
+          }
+        };
+
+        reader.readAsText(file);
+      });
+    }
+  </script>
+
+</body>
+</html>
